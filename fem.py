@@ -18,8 +18,8 @@ def solve_poisson_1d(f, L=1.0, N=50, g0=0.0, gL=0.0):
     b = np.zeros(N+1, dtype=float)
 
     # Cuadratura de Gauss 2 puntos por elemento
-    xi_g = np.array([-1/np.sqrt(3), 1/np.sqrt(3)])
-    w_g  = np.array([1.0, 1.0])
+    deg = 10
+    xi_g, w_g = np.polynomial.legendre.leggauss(deg)
 
     # Ensamblaje
     for e in range(N):
