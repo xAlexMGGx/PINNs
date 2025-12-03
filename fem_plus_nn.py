@@ -47,7 +47,7 @@ def f_source_func(x):
 # ==========================================
 
 # Usamos N=10 para simular una malla gruesa donde FEM falla
-N_elements = 10
+N_elements = 11
 x_fem, u_fem_nodes = solve_poisson_1d(f_source_func, L=L_domain, N=N_elements)
 
 # Interpolador para evaluar u_FEM en cualquier punto x (necesario para sumar a la NN)
@@ -89,7 +89,8 @@ optimizer = optim.Adam(model.parameters(), lr=0.005)
 
 # Datos de entrenamiento para la NN
 # Usamos puntos densos para aprender la física (f) correctamente
-x_train_np = np.linspace(0, L_domain, 500)
+len_x_train = 500
+x_train_np = np.linspace(0, L_domain, len_x_train)
 x_train = torch.tensor(x_train_np, dtype=torch.float32, requires_grad=True).unsqueeze(1).to(device)
 f_target = torch.tensor(f_source_func(x_train_np), dtype=torch.float32).unsqueeze(1).to(device)
 u_fem = get_u_fem(x_train_np)
@@ -98,6 +99,21 @@ u_fem_tensor = torch.tensor(u_fem, dtype=torch.float32).unsqueeze(1).to(device)
 fem_spline_2nd_deriv = fem_spline.derivative(nu=2)
 u_fem_2nd_deriv = fem_spline_2nd_deriv(x_train_np)
 u_fem_2nd_deriv_tensor = torch.tensor(u_fem_2nd_deriv, dtype=torch.float32).unsqueeze(1).to(device)
+
+# Determinamos máscara en la que aplicar el entrenamiento en función de los residuos de FEM
+fem_residual = - fem_spline_2nd_deriv(x_train_np) - f_source_func(x_train_np)
+mask_window = np.abs(fem_residual) > 1
+
+kernel_size = len_x_train // 15
+kernel = np.ones(kernel_size) / kernel_size
+mask_window = np.convolve(mask_window.astype(float), kernel, mode='same') > 0.5
+
+x_train = x_train[mask_window].detach().clone()
+x_train.requires_grad = True
+f_target = f_target[mask_window]
+u_fem_2nd_deriv_tensor = u_fem_2nd_deriv_tensor[mask_window]
+u_fem_nodes_tensor = torch.tensor(u_fem_nodes, dtype=torch.float32).unsqueeze(1).to(device)
+
 
 # ==========================================
 # 4. BUCLE DE ENTRENAMIENTO
@@ -125,12 +141,12 @@ for epoch in range(epochs):
     # para que la NN solo tenga que aportar lo que falta.
     
     u_total_xx = u_fem_2nd_deriv_tensor + grad_uu_nn  # Suma de curvaturas
-    residual = -u_total_xx - f_target          # El residuo real
+    residual = - u_total_xx - f_target          # El residuo real
     
     # 4. Loss
     loss_res = torch.mean(residual**2)
 
-    loss_cor = torch.mean((model(torch.tensor(x_fem, dtype=torch.float32).unsqueeze(1).to(device)) - torch.tensor(u_fem_nodes, dtype=torch.float32).unsqueeze(1).to(device))**2)  # Regularización para evitar grandes correcciones fuera de la ventana
+    loss_cor = torch.mean((model(torch.tensor(x_fem, dtype=torch.float32).unsqueeze(1).to(device)) - u_fem_nodes_tensor)**2)  # Regularización para evitar grandes correcciones fuera de la ventana
 
     
     loss = loss_res + loss_cor
